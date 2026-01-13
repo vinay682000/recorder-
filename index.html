@@ -787,6 +787,27 @@
         function startRecording() {
             isRecording = true;
             
+            // Request microphone permission on mobile if needed
+            if (isMobile && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                navigator.mediaDevices.getUserMedia({ audio: true })
+                    .then(() => {
+                        startRecognition();
+                    })
+                    .catch((err) => {
+                        console.error('Microphone permission error:', err);
+                        statusDiv.textContent = '❌ Microphone access denied';
+                        statusDiv.classList.remove('recording');
+                        isRecording = false;
+                        startBtn.disabled = false;
+                        stopBtn.disabled = true;
+                        showNotification('Please allow microphone access in browser settings');
+                    });
+            } else {
+                startRecognition();
+            }
+        }
+        
+        function startRecognition() {
             // Add session header if starting a new session
             if (!hasAddedSessionHeader) {
                 const now = new Date();
@@ -810,18 +831,27 @@
                 saveToLocalStorage();
             }
             
-            recognition.start();
-            startBtn.disabled = true;
-            stopBtn.disabled = false;
-            statusDiv.textContent = '🔴 Recording...';
-            statusDiv.classList.add('recording');
-            
-            // Vibration feedback
-            vibrate([50, 100, 50]);
-            
-            // Start timer
-            recordingStartTime = Date.now();
-            timerInterval = setInterval(() => updateTimer(true), 1000);
+            try {
+                recognition.start();
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                statusDiv.textContent = '🔴 Recording...';
+                statusDiv.classList.add('recording');
+                
+                // Vibration feedback
+                vibrate([50, 100, 50]);
+                
+                // Start timer
+                recordingStartTime = Date.now();
+                timerInterval = setInterval(() => updateTimer(true), 1000);
+            } catch (err) {
+                console.error('Failed to start recognition:', err);
+                statusDiv.textContent = '❌ Failed to start recording';
+                statusDiv.classList.remove('recording');
+                isRecording = false;
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+            }
         }
 
         startBtn.addEventListener('click', startRecording);
@@ -857,7 +887,17 @@
 
         // Handle recognition result
         recognition.onresult = (event) => {
-            let transcript = event.results[0][0].transcript;
+            // IMPORTANT: Only process when isFinal is true to avoid duplicates
+            if (!event.results[event.results.length - 1].isFinal) {
+                return; // Ignore interim results
+            }
+            
+            let transcript = event.results[event.results.length - 1][0].transcript;
+            
+            // Skip if empty
+            if (!transcript.trim()) {
+                return;
+            }
             
             // Auto-capitalize first letter
             transcript = transcript.charAt(0).toUpperCase() + transcript.slice(1);
@@ -900,18 +940,39 @@
             console.error('Speech recognition error:', event.error);
             
             if (event.error === 'no-speech') {
+                // Silently restart on no-speech
                 if (isRecording) {
                     recognition.start();
                 }
             } else if (event.error === 'aborted') {
                 return;
+            } else if (event.error === 'not-allowed') {
+                // Microphone permission denied
+                statusDiv.textContent = '❌ Microphone permission denied. Please allow access in browser settings.';
+                statusDiv.classList.remove('recording');
+                isRecording = false;
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                showNotification('Microphone access denied. Please check browser permissions.');
+            } else if (event.error === 'network') {
+                statusDiv.textContent = '❌ Network error. Check your internet connection.';
+                statusDiv.classList.remove('recording');
+                if (isRecording) {
+                    setTimeout(() => {
+                        recognition.start();
+                    }, 1500);
+                }
             } else {
                 statusDiv.textContent = `Error: ${event.error}`;
                 statusDiv.classList.remove('recording');
                 
                 if (isRecording) {
                     setTimeout(() => {
-                        recognition.start();
+                        try {
+                            recognition.start();
+                        } catch (e) {
+                            console.error('Failed to restart recognition:', e);
+                        }
                     }, 1000);
                 }
             }
@@ -1210,14 +1271,21 @@
             }, 300);
         });
 
-        // Prevent zoom on double tap for buttons
+        // Better touch handling for mobile
         if (isMobile) {
             const buttons = document.querySelectorAll('button');
             buttons.forEach(button => {
+                button.addEventListener('touchstart', (e) => {
+                    button.style.transform = 'scale(0.95)';
+                });
                 button.addEventListener('touchend', (e) => {
+                    button.style.transform = '';
                     e.preventDefault();
                     button.click();
                 }, { passive: false });
+                button.addEventListener('touchcancel', (e) => {
+                    button.style.transform = '';
+                });
             });
         }
 
@@ -1233,10 +1301,10 @@
             }
         }
 
-        // Request wake lock when recording starts
-        const originalStartRecording = startRecording;
-        startRecording = function() {
-            originalStartRecording();
+        // Request wake lock when recognition starts
+        const originalStartRecognition = startRecognition;
+        startRecognition = function() {
+            originalStartRecognition();
             requestWakeLock();
         };
 
@@ -1247,7 +1315,7 @@
             if (wakeLock) {
                 wakeLock.release().then(() => {
                     wakeLock = null;
-                });
+                }).catch(err => console.log('Wake lock release error:', err));
             }
         };
 
