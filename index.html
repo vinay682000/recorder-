@@ -9,7 +9,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Dictaphone">
     <meta name="description" content="Voice recorder and note-taking app with speech recognition">
-    <link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoiRGljdGFwaG9uZSIsInNob3J0X25hbWUiOiJEaWN0YXBob25lIiwic3RhcnRfdXJsIjoiLiIsImRpc3BsYXkiOiJzdGFuZGFsb25lIiwiYmFja2dyb3VuZF9jb2xvciI6IiMxYTFhMmUiLCJ0aGVtZV9jb2xvciI6IiMxYTFhMmUiLCJpY29ucyI6W3sic3JjIjoiZGF0YTppbWFnZS9zdmcreG1sLCUzQ3N2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAxMDAgMTAwJyUzRSUzQ3RleHQgeT0nLjllbScgZm9udC1zaXplPSc5MCclM0UlRjAlOUYlOEUlQTQlM0MvdGV4dCUzRSUzQy9zdmclM0UiLCJzaXplcyI6IjE5MngxOTIiLCJ0eXBlIjoiaW1hZ2Uvc3ZnK3htbCJ9XX0=">
+    <link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoiRGljdGFwaG9uZSIsInNob3J0X25hbWUiOiJEaWN0YXBob25lIiwic3RhcnRfdXJsIjoiL3JlY29yZGVyLSIsImRpc3BsYXkiOiJzdGFuZGFsb25lIiwiYmFja2dyb3VuZF9jb2xvciI6IiMxYTFhMmUiLCJ0aGVtZV9jb2xvciI6IiMxYTFhMmUiLCJpY29ucyI6W3sic3JjIjoiZGF0YTppbWFnZS9zdmcreG1sLCUzQ3N2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAxMDAgMTAwJyUzRSUzQ3RleHQgeT0nLjllbScgZm9udC1zaXplPSc5MCclM0UlRjAlOUYlOEUlQTQlM0MvdGV4dCUzRSUzQy9zdmclM0UiLCJzaXplcyI6IjE5MngxOTIiLCJ0eXBlIjoiaW1hZ2Uvc3ZnK3htbCJ9XX0=">
     <title>Dictaphone - Voice Recorder & Note Taker</title>
     <style>
         * {
@@ -787,27 +787,6 @@
         function startRecording() {
             isRecording = true;
             
-            // Request microphone permission on mobile if needed
-            if (isMobile && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                navigator.mediaDevices.getUserMedia({ audio: true })
-                    .then(() => {
-                        startRecognition();
-                    })
-                    .catch((err) => {
-                        console.error('Microphone permission error:', err);
-                        statusDiv.textContent = '❌ Microphone access denied';
-                        statusDiv.classList.remove('recording');
-                        isRecording = false;
-                        startBtn.disabled = false;
-                        stopBtn.disabled = true;
-                        showNotification('Please allow microphone access in browser settings');
-                    });
-            } else {
-                startRecognition();
-            }
-        }
-        
-        function startRecognition() {
             // Add session header if starting a new session
             if (!hasAddedSessionHeader) {
                 const now = new Date();
@@ -837,6 +816,7 @@
                 stopBtn.disabled = false;
                 statusDiv.textContent = '🔴 Recording...';
                 statusDiv.classList.add('recording');
+                showNotification('Listening...');
                 
                 // Vibration feedback
                 vibrate([50, 100, 50]);
@@ -844,6 +824,11 @@
                 // Start timer
                 recordingStartTime = Date.now();
                 timerInterval = setInterval(() => updateTimer(true), 1000);
+                
+                // Request wake lock to keep screen on
+                if ('wakeLock' in navigator) {
+                    navigator.wakeLock.request('screen').catch(err => console.log('Wake lock error:', err));
+                }
             } catch (err) {
                 console.error('Failed to start recognition:', err);
                 statusDiv.textContent = '❌ Failed to start recording';
@@ -851,6 +836,7 @@
                 isRecording = false;
                 startBtn.disabled = false;
                 stopBtn.disabled = true;
+                showNotification('Failed to start recording: ' + err.message);
             }
         }
 
@@ -887,45 +873,42 @@
 
         // Handle recognition result
         recognition.onresult = (event) => {
-            // IMPORTANT: Only process when isFinal is true to avoid duplicates
-            if (!event.results[event.results.length - 1].isFinal) {
-                return; // Ignore interim results
+            // Process final results only
+            const lastResult = event.results[event.results.length - 1];
+            if (lastResult.isFinal) {
+                let transcript = lastResult[0].transcript;
+                
+                // Skip if empty
+                if (transcript.trim()) {
+                    // Auto-capitalize first letter
+                    transcript = transcript.charAt(0).toUpperCase() + transcript.slice(1);
+                    
+                    // Add timestamp if enabled
+                    let sentenceWithMeta = transcript;
+                    if (timestampsEnabled) {
+                        const timestamp = new Date().toLocaleTimeString();
+                        sentenceWithMeta = `[${timestamp}] ${transcript}`;
+                    }
+                    
+                    // Store sentence for undo functionality
+                    sentences.push(sentenceWithMeta);
+                    
+                    // Add the new sentence to the full transcript
+                    if (fullTranscript) {
+                        fullTranscript += ' ' + sentenceWithMeta;
+                    } else {
+                        fullTranscript = sentenceWithMeta;
+                    }
+                    
+                    transcriptDiv.textContent = fullTranscript;
+                    updateStats();
+                    updateUndoButton();
+                    saveToLocalStorage();
+                    
+                    // Auto-scroll to bottom
+                    transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
+                }
             }
-            
-            let transcript = event.results[event.results.length - 1][0].transcript;
-            
-            // Skip if empty
-            if (!transcript.trim()) {
-                return;
-            }
-            
-            // Auto-capitalize first letter
-            transcript = transcript.charAt(0).toUpperCase() + transcript.slice(1);
-            
-            // Add timestamp if enabled
-            let sentenceWithMeta = transcript;
-            if (timestampsEnabled) {
-                const timestamp = new Date().toLocaleTimeString();
-                sentenceWithMeta = `[${timestamp}] ${transcript}`;
-            }
-            
-            // Store sentence for undo functionality
-            sentences.push(sentenceWithMeta);
-            
-            // Add the new sentence to the full transcript
-            if (fullTranscript) {
-                fullTranscript += ' ' + sentenceWithMeta;
-            } else {
-                fullTranscript = sentenceWithMeta;
-            }
-            
-            transcriptDiv.textContent = fullTranscript;
-            updateStats();
-            updateUndoButton();
-            saveToLocalStorage();
-            
-            // Auto-scroll to bottom
-            transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
         };
 
         // Auto-restart recognition when it ends (infinite loop)
@@ -942,38 +925,37 @@
             if (event.error === 'no-speech') {
                 // Silently restart on no-speech
                 if (isRecording) {
-                    recognition.start();
+                    console.log('No speech detected, restarting...');
+                    setTimeout(() => {
+                        try {
+                            recognition.start();
+                        } catch (e) {
+                            console.error('Restart failed:', e);
+                        }
+                    }, 100);
                 }
             } else if (event.error === 'aborted') {
+                // This is expected when we call stop()
                 return;
-            } else if (event.error === 'not-allowed') {
-                // Microphone permission denied
-                statusDiv.textContent = '❌ Microphone permission denied. Please allow access in browser settings.';
-                statusDiv.classList.remove('recording');
-                isRecording = false;
-                startBtn.disabled = false;
-                stopBtn.disabled = true;
-                showNotification('Microphone access denied. Please check browser permissions.');
             } else if (event.error === 'network') {
-                statusDiv.textContent = '❌ Network error. Check your internet connection.';
-                statusDiv.classList.remove('recording');
-                if (isRecording) {
-                    setTimeout(() => {
-                        recognition.start();
-                    }, 1500);
-                }
+                statusDiv.textContent = '❌ Network error - check internet';
+                showNotification('Network error. Check your internet connection.');
+                stopRecording();
+            } else if (event.error === 'not-allowed') {
+                statusDiv.textContent = '❌ Microphone access denied';
+                showNotification('Please allow microphone access in browser settings.');
+                stopRecording();
             } else {
+                console.error('Other error:', event.error);
                 statusDiv.textContent = `Error: ${event.error}`;
-                statusDiv.classList.remove('recording');
-                
                 if (isRecording) {
                     setTimeout(() => {
                         try {
                             recognition.start();
                         } catch (e) {
-                            console.error('Failed to restart recognition:', e);
+                            console.error('Restart failed:', e);
                         }
-                    }, 1000);
+                    }, 500);
                 }
             }
         };
@@ -1288,36 +1270,6 @@
                 });
             });
         }
-
-        // Wake lock to prevent screen from sleeping during recording
-        let wakeLock = null;
-        async function requestWakeLock() {
-            if ('wakeLock' in navigator) {
-                try {
-                    wakeLock = await navigator.wakeLock.request('screen');
-                } catch (err) {
-                    console.log('Wake lock error:', err);
-                }
-            }
-        }
-
-        // Request wake lock when recognition starts
-        const originalStartRecognition = startRecognition;
-        startRecognition = function() {
-            originalStartRecognition();
-            requestWakeLock();
-        };
-
-        // Release wake lock when recording stops
-        const originalStopRecording = stopRecording;
-        stopRecording = function() {
-            originalStopRecording();
-            if (wakeLock) {
-                wakeLock.release().then(() => {
-                    wakeLock = null;
-                }).catch(err => console.log('Wake lock release error:', err));
-            }
-        };
 
         // Warn before closing if recording
         window.addEventListener('beforeunload', (e) => {
